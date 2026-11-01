@@ -69,18 +69,16 @@ export default function FetchApp() {
 
   useEffect(() => {
     if (!job || !['queued', 'running'].includes(job.status)) return
-    const source = new EventSource(`${API}/api/jobs/${job.id}/events`)
-    source.addEventListener('progress', async () => {
-      const response = await fetch(`${API}/api/jobs/${job.id}`)
-      if (response.ok) setJob(await response.json())
-    })
-    source.addEventListener('status', async () => {
-      source.close()
-      const response = await fetch(`${API}/api/jobs/${job.id}`)
-      if (response.ok) setJob(await response.json())
-    })
-    source.onerror = () => source.close()
-    return () => source.close()
+    let active = true
+    const refresh = async () => {
+      try {
+        const response = await fetch(`${API}/api/jobs/${job.id}`, { cache: 'no-store' })
+        if (active && response.ok) setJob(await response.json())
+      } catch { /* Keep the current progress visible during a brief network interruption. */ }
+    }
+    void refresh()
+    const timer = window.setInterval(refresh, 1500)
+    return () => { active = false; window.clearInterval(timer) }
   }, [job?.id, job?.status])
 
   async function submit(e: FormEvent) {

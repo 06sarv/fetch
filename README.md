@@ -34,9 +34,9 @@ The API accepts CSV, JSON, JSONL, XLSX, and delimited TXT files up to 25 MB. It 
 
 ## Deploy frontend and backend
 
-The local Docker Compose setup is for development. For the prepared public demo deployment, host the Next.js frontend on Vercel and the API plus five private agent services on Render. The API needs a paid persistent disk; see [render.yaml](render.yaml) and [docs/operations.md](docs/operations.md) for setup details.
+The no-cost demo runs the full Docker Compose stack on your Mac and shares it with invited testers through a temporary Cloudflare Quick Tunnel. Your Mac and Docker must stay running, and the temporary URL changes when the tunnel restarts. See [docs/operations.md](docs/operations.md) for setup.
 
-Follow the Render and Vercel setup in [docs/operations.md](docs/operations.md). Keep `backend/.env`, local job data, and uploaded files out of Git. `NEXT_PUBLIC_API_URL` is public and compiled into the browser bundle at build time; never put provider credentials there.
+The separate Render deployment in [render.yaml](render.yaml) requires paid services and a persistent disk. Keep `backend/.env`, local job data, and uploaded files out of Git. Never put provider credentials in `NEXT_PUBLIC_*` values.
 
 The public demo has a per-IP job limit and treats unguessable job IDs as capability links. It does not have user accounts or per-user ownership. Keep the audience small and do not put sensitive datasets in it. Add sign-in and per-user authorization before using it as a public product.
 

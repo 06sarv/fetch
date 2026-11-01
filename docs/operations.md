@@ -37,16 +37,24 @@ The local demo reads `GROQ`, `OPENROUTER`, and `FIRECRAWL` from `backend/.env` (
 - Complete a synthetic run and an uploaded CSV run, review both, download each artifact, and test rejection and worker restart behavior.
 - Verify that logs contain job IDs and operational errors but no row values, uploaded content, or credentials.
 
-## Public demo deployment: Vercel and Render
+## No-cost demo sharing from your Mac
 
-The checked-in [Render Blueprint](../render.yaml) creates a public API plus five private agent services. The API owns SQLite and a persistent disk; agents exchange allowlisted files through authenticated internal API routes. Render supports this architecture with private services and service-to-service networking. The disk and private services require paid compute. Render's free web services sleep, cannot attach a persistent disk, and cannot receive private network traffic, so the free tier cannot host this complete architecture. [Render private services](https://render.com/docs/private-services), [persistent disks](https://render.com/docs/disks), [free instance limits](https://render.com/docs/free)
+Render's free services cannot host this complete architecture: its free web services have ephemeral filesystems and cannot receive private network traffic, and private services are not available on the free tier. [Render free limits](https://render.com/docs/free)
 
-1. In Render, create a Blueprint from `06sarv/fetch` and select `render.yaml`. Review the six backend services. They must run in the same region. Choose an available paid plan; the API also requires its persistent disk. The Blueprint creates a shared `FETCH_INTERNAL_TOKEN` environment group. Enter your Groq key (recommended), optional OpenRouter key, and Firecrawl key as Render secrets; never commit these values.
-2. Deploy the Blueprint. The API is the only public service. The five agents are private. Confirm the API health endpoint and that all agent services are live.
-3. Copy the API's public HTTPS URL from Render. In Vercel, import the same GitHub repo, set Root Directory to `frontend`, and set `NEXT_PUBLIC_API_URL` to that URL without a trailing slash. Deploy the frontend.
-4. Set the Render API's `API_CORS_ORIGINS` to the exact Vercel production origin (for example, `https://your-project.vercel.app`) and redeploy the API. Add preview origins only if you want those deployments to call the demo. `NEXT_PUBLIC_API_URL` is public and embedded into the browser bundle during the build. [Vercel environment variables](https://vercel.com/docs/environment-variables/framework-environment-variables)
-5. Verify API health, CORS from Vercel, a synthetic job, an uploaded CSV, review, and artifact download.
+For a temporary demo without a hosting bill, run the whole Compose stack on your Mac and expose only the web gateway through a Cloudflare Quick Tunnel. The five agents remain independent containers, and job data stays in the local Docker volume. Your Mac, Docker, and tunnel process must stay running. The URL is temporary and changes when you restart the tunnel. Quick Tunnels are intended for testing and have no uptime guarantee. They do not support SSE, so the UI uses short polling for progress instead. [Cloudflare Quick Tunnels](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)
 
-The public demo limits job creation to five jobs per hour per observed client IP and each upload to 25 MB. The limit is in-memory and assumes one API replica. Job UUIDs are capability links for reading progress and downloading approved artifacts, so do not share them publicly. This suits a small demonstration, not an abuse-resistant public product. Before inviting broad traffic, add sign-in, per-user job ownership, durable rate limits, a durable job queue, and stronger upload/resource quotas. Keep the API at one replica while using SQLite and its single persistent disk.
+1. Install `cloudflared` if needed: `brew install cloudflared`.
+2. From the project folder, start Fetch: `docker compose up --build -d`.
+3. In another terminal, start a tunnel restricted to the testers' email addresses:
 
-The deployment cannot be completed from this workspace without access to the user's Render and Vercel accounts and the corresponding API-provider secrets.
+   ```sh
+   cloudflared tunnel --url http://localhost:3002 --allowed-mail 'tester1@example.com,tester2@example.com'
+   ```
+
+4. Share the generated `trycloudflare.com` URL and the allowed email addresses with testers. They verify access using the one-time PIN sent to their email. Replace the example addresses with the actual invited testers. [Quick Tunnel email access](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)
+
+The current app has no user accounts or per-user ownership. Keep the tunnel email-restricted, use only demo data, and stop `cloudflared` when the demo ends. The API still limits job creation and uploads, but the IP limit may treat tunnel visitors as one client. If you need a permanent always-on public site, this setup is not a substitute for paid hosting.
+
+## Paid hosted alternative: Render
+
+The checked-in [Render Blueprint](../render.yaml) creates a public API plus five private agent services. The API owns SQLite and a persistent disk; agents exchange allowlisted files through authenticated private API routes. This architecture requires paid Render compute and storage. [Render private services](https://render.com/docs/private-services), [persistent disks](https://render.com/docs/disks)
