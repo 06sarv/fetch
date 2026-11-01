@@ -1,13 +1,17 @@
 import asyncio
 import csv
+import hmac
 import logging
 import shutil
+import threading
+import time
 import uuid
+from collections import defaultdict, deque
 from pathlib import Path
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
-from .config import CORS_ORIGINS, DATA_DIR, MAX_UPLOAD_MB
+from fastapi.responses import FileResponse, Response, StreamingResponse
+from .config import CORS_ORIGINS, DATA_DIR, MAX_UPLOAD_MB, MAX_JOBS_PER_HOUR, INTERNAL_TOKEN
 from .schemas import ColumnSelection, JobView, ReviewRequest
 from .store import JobStore, now_iso
 from .agents.workflow import _read, deliver, discover
@@ -16,11 +20,40 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 STORE = JobStore(DATA_DIR)
 app = FastAPI(title="Fetch Dataset Engine", version="0.1.0")
 logger = logging.getLogger("fetch")
-app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_credentials=False, allow_methods=["GET", "POST"], allow_headers=["Content-Type", "Last-Event-ID"])
+app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_credentials=False, allow_methods=["GET", "POST", "PUT"], allow_headers=["Content-Type", "Last-Event-ID"])
+_job_requests = defaultdict(deque)
+_rate_lock = threading.Lock()
+INTERNAL_FILES = {"input.csv", "staged.csv", "engineered.csv", "dataset.csv", "dataset.json", "prepare.py"}
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+def require_internal_token(token: str | None):
+    if not INTERNAL_TOKEN or not token or not hmac.compare_digest(token, INTERNAL_TOKEN):
+        raise HTTPException(401, "Internal service authentication failed")
+
+@app.api_route("/internal/jobs/{job_id}/files/{filename}", methods=["GET", "PUT"], include_in_schema=False)
+async def agent_file_exchange(job_id: str, filename: str, request: Request, x_fetch_internal_token: str | None = Header(None)):
+    require_internal_token(x_fetch_internal_token)
+    try:
+        uuid.UUID(job_id)
+    except ValueError as exc:
+        raise HTTPException(404, "Job not found") from exc
+    allowed_upload = Path(filename).name == filename and filename.startswith("upload.") and Path(filename).suffix.lower() in {".csv", ".json", ".jsonl", ".ndjson", ".xlsx", ".txt"}
+    if filename not in INTERNAL_FILES and not allowed_upload:
+        raise HTTPException(404, "File not found")
+    path = DATA_DIR / "jobs" / job_id / filename
+    if request.method == "GET":
+        if not path.is_file():
+            raise HTTPException(404, "File not found")
+        return FileResponse(path)
+    body = await request.body()
+    if len(body) > max(MAX_UPLOAD_MB * 4, 100) * 1024 * 1024:
+        raise HTTPException(413, "Internal artifact exceeds size limit")
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.write_bytes(body)
+    return Response(status_code=204)
 
 @app.get("/api/jobs", response_model=list[JobView])
 def list_jobs():
@@ -60,7 +93,16 @@ async def _save_upload(upload: UploadFile, job_dir: Path):
     return path
 
 @app.post("/api/jobs", response_model=JobView, status_code=202)
-async def create_job(background_tasks: BackgroundTasks, objective: str = Form(..., min_length=12, max_length=2000), file: UploadFile | None = File(None)):
+async def create_job(request: Request, background_tasks: BackgroundTasks, objective: str = Form(..., min_length=12, max_length=2000), file: UploadFile | None = File(None)):
+    peer = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    with _rate_lock:
+        attempts = _job_requests[peer]
+        while attempts and now - attempts[0] > 3600:
+            attempts.popleft()
+        if len(attempts) >= MAX_JOBS_PER_HOUR:
+            raise HTTPException(429, f"Demo limit reached. Try again later (maximum {MAX_JOBS_PER_HOUR} jobs per hour per IP).")
+        attempts.append(now)
     job_id = str(uuid.uuid4())
     folder = DATA_DIR / "jobs" / job_id
     folder.mkdir(parents=True, mode=0o700)

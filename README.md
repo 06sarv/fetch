@@ -24,7 +24,7 @@ Upload `examples/crappy_student_data.csv` to try preprocessing. It contains miss
 
 Enter an ML objective, optionally add details in the guided conversation, and upload a dataset or use the synthetic demo fallback. Otto interprets the goal. Scout profiles the data. Forger searches public dataset listings through Firecrawl. Search results are suggestions; download a result and upload it to process it. Engineer cleans selected columns. Assembler prepares CSV, JSON, and a reproducible Python script. Review the preview and approve before downloading.
 
-The API is the LangGraph orchestrator. Otto, Scout, Forger, Engineer, and Assembler each run in their own FastAPI container and are called over the private Docker network. The agents exchange structured job state over HTTP and pass tabular data through the shared private job volume. The workflow remains sequential around the user's column selection and review. LLM calls receive the objective and aggregate column summaries; raw uploaded rows stay in the shared local job volume.
+The API is the LangGraph orchestrator. Otto, Scout, Forger, Engineer, and Assembler each run in their own FastAPI container and are called over a private network. Agents exchange structured state over HTTP and retrieve intermediate files through authenticated internal API routes. The workflow remains sequential around column selection and review. LLM calls receive the objective and aggregate column summaries; uploaded rows are processed by the services and are not sent to LLM providers.
 
 ## Configuration
 
@@ -34,14 +34,11 @@ The API accepts CSV, JSON, JSONL, XLSX, and delimited TXT files up to 25 MB. It 
 
 ## Deploy frontend and backend
 
-The current Docker Compose setup is for local use. A public deployment needs a frontend host and a separately reachable backend host.
+The local Docker Compose setup is for development. For the prepared public demo deployment, host the Next.js frontend on Vercel and the API plus five private agent services on Railway. Railway requires service environment variables and a persistent volume for the API. See [docs/operations.md](docs/operations.md) for the service-by-service setup.
 
-1. Push the source to a private or public Git repository. Keep `backend/.env`, local job data, and uploaded files out of Git.
-2. Deploy the FastAPI service from `backend/Dockerfile`. Configure `GROQ`, `OPENROUTER`, and `FIRECRAWL` as backend environment secrets, set a persistent `DATA_DIR`, and set `API_CORS_ORIGINS` to the exact frontend origin.
-3. Deploy the Next.js service from `frontend/Dockerfile`. Set the build argument and runtime variable `NEXT_PUBLIC_API_URL` to the public HTTPS API URL. This value is compiled into the browser bundle at build time.
-4. Configure HTTPS and verify `/health`, job creation, SSE progress, dataset upload, review, and artifact downloads.
+Follow the Railway and Vercel setup in [docs/operations.md](docs/operations.md). Keep `backend/.env`, local job data, and uploaded files out of Git. `NEXT_PUBLIC_API_URL` is public and compiled into the browser bundle at build time; never put provider credentials there.
 
-The current SQLite and local filesystem storage are for a single instance. Before using the app with public users or multiple instances, add authentication and per-user authorization, managed database and object storage, a durable worker queue, request limits, backups, and monitoring. Never expose the current unauthenticated API publicly as-is.
+The public demo has a per-IP job limit and treats unguessable job IDs as capability links. It does not have user accounts or per-user ownership. Keep the audience small and do not put sensitive datasets in it. Add sign-in and per-user authorization before using it as a public product.
 
 ## Development checks
 

@@ -3,8 +3,10 @@ x-agent-base: &agent-base
   env_file:
     - ./backend/.env
   command: ["uvicorn", "app.agent_service:app", "--host", "0.0.0.0", "--port", "8100"]
-  volumes:
-    - fetch-data:/var/lib/fetch
+  environment:
+    DATA_DIR: /tmp/fetch
+    FETCH_STORAGE_URL: http://api:8000
+    FETCH_INTERNAL_TOKEN: ${FETCH_INTERNAL_TOKEN:-fetch-local-agent-token}
   expose:
     - "8100"
   healthcheck:
@@ -16,19 +18,39 @@ x-agent-base: &agent-base
 services:
   otto:
     <<: *agent-base
-    environment: {AGENT_ROLE: otto, DATA_DIR: /var/lib/fetch}
+    environment:
+      AGENT_ROLE: otto
+      DATA_DIR: /tmp/fetch
+      FETCH_STORAGE_URL: http://api:8000
+      FETCH_INTERNAL_TOKEN: ${FETCH_INTERNAL_TOKEN:-fetch-local-agent-token}
   scout:
     <<: *agent-base
-    environment: {AGENT_ROLE: scout, DATA_DIR: /var/lib/fetch}
+    environment:
+      AGENT_ROLE: scout
+      DATA_DIR: /tmp/fetch
+      FETCH_STORAGE_URL: http://api:8000
+      FETCH_INTERNAL_TOKEN: ${FETCH_INTERNAL_TOKEN:-fetch-local-agent-token}
   forger:
     <<: *agent-base
-    environment: {AGENT_ROLE: forger, DATA_DIR: /var/lib/fetch}
+    environment:
+      AGENT_ROLE: forger
+      DATA_DIR: /tmp/fetch
+      FETCH_STORAGE_URL: http://api:8000
+      FETCH_INTERNAL_TOKEN: ${FETCH_INTERNAL_TOKEN:-fetch-local-agent-token}
   engineer:
     <<: *agent-base
-    environment: {AGENT_ROLE: engineer, DATA_DIR: /var/lib/fetch}
+    environment:
+      AGENT_ROLE: engineer
+      DATA_DIR: /tmp/fetch
+      FETCH_STORAGE_URL: http://api:8000
+      FETCH_INTERNAL_TOKEN: ${FETCH_INTERNAL_TOKEN:-fetch-local-agent-token}
   assembler:
     <<: *agent-base
-    environment: {AGENT_ROLE: assembler, DATA_DIR: /var/lib/fetch}
+    environment:
+      AGENT_ROLE: assembler
+      DATA_DIR: /tmp/fetch
+      FETCH_STORAGE_URL: http://api:8000
+      FETCH_INTERNAL_TOKEN: ${FETCH_INTERNAL_TOKEN:-fetch-local-agent-token}
   api:
     build: ./backend
     env_file:
@@ -37,6 +59,8 @@ services:
       DATA_DIR: /var/lib/fetch
       API_CORS_ORIGINS: http://localhost:3002,http://127.0.0.1:3002
       MAX_UPLOAD_MB: 25
+      MAX_JOBS_PER_HOUR: 5
+      FETCH_INTERNAL_TOKEN: ${FETCH_INTERNAL_TOKEN:-fetch-local-agent-token}
       OTTO_URL: http://otto:8100
       SCOUT_URL: http://scout:8100
       FORGER_URL: http://forger:8100

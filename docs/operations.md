@@ -36,3 +36,26 @@ The local demo reads `GROQ`, `OPENROUTER`, and `FIRECRAWL` from `backend/.env` (
 - Configure the proxy and TLS, then verify `/health` through the intended network boundary.
 - Complete a synthetic run and an uploaded CSV run, review both, download each artifact, and test rejection and worker restart behavior.
 - Verify that logs contain job IDs and operational errors but no row values, uploaded content, or credentials.
+
+## Public demo deployment: Vercel and Railway
+
+The Railway API owns the SQLite database and one persistent volume. Agent services do not mount that volume: they fetch and store allowlisted intermediate files through authenticated private API routes. Set the same high-entropy `FETCH_INTERNAL_TOKEN` on the API and all five agent services. Never use the local Compose fallback token in a hosted environment.
+
+Create six Railway services from the GitHub repository `06sarv/fetch`. For each, set the service root directory to `/backend`, use the repository Dockerfile, and deploy in the same Railway project and environment:
+
+| Service | Start command | Required variables |
+| --- | --- | --- |
+| `api` | Dockerfile default | `DATA_DIR=/data`, `FETCH_INTERNAL_TOKEN`, `MAX_UPLOAD_MB=25`, `MAX_JOBS_PER_HOUR=5`, `API_CORS_ORIGINS` |
+| `otto` | `uvicorn app.agent_service:app --host 0.0.0.0 --port 8100` | `AGENT_ROLE=otto`, `FETCH_STORAGE_URL=http://${{api.RAILWAY_PRIVATE_DOMAIN}}:8000`, `FETCH_INTERNAL_TOKEN`, `GROQ` and optional `OPENROUTER` |
+| `scout` | Same agent command | `AGENT_ROLE=scout`, storage URL, token, `GROQ` and optional `OPENROUTER` |
+| `forger` | Same agent command | `AGENT_ROLE=forger`, storage URL, token, `FIRECRAWL` |
+| `engineer` | Same agent command | `AGENT_ROLE=engineer`, storage URL, token |
+| `assembler` | Same agent command | `AGENT_ROLE=assembler`, storage URL, token |
+
+On `api`, set `OTTO_URL`, `SCOUT_URL`, `FORGER_URL`, `ENGINEER_URL`, and `ASSEMBLER_URL` to `http://${{service.RAILWAY_PRIVATE_DOMAIN}}:8100` for the corresponding service. Add a Railway volume to `api` mounted at `/data`. Expose only `api` publicly and generate its HTTPS domain. Leave agent services private. Railway service references and private hostnames must be configured in the same project and environment.
+
+In Vercel, import the same GitHub repository and set the project Root Directory to `frontend`. Add `NEXT_PUBLIC_API_URL` as the public Railway API HTTPS origin, with no trailing slash, for Production and Preview; then deploy. Since the browser calls the API directly, set Railway `API_CORS_ORIGINS` to the exact Vercel production URL. Add any Vercel preview origins you intend to allow. Redeploy the API after setting CORS. Keep provider keys and `FETCH_INTERNAL_TOKEN` out of Vercel.
+
+The public demo limits job creation to five jobs per hour per observed client IP and each upload to 25 MB. The limit is in-memory and assumes one API replica. Job UUIDs are capability links for reading progress and downloading approved artifacts, so do not share them publicly. This is suitable for a small demonstration, not an abuse-resistant public product. Before inviting broad traffic, add sign-in, per-user job ownership, durable rate limits, a durable job queue, and stronger upload/resource quotas. Keep the API at one replica while using SQLite and a single Railway volume.
+
+The deployment cannot be completed from this workspace without access to the user's Vercel and Railway accounts and the corresponding API-provider secrets. After deployment, verify API health, all five private agent health checks, CORS from the Vercel origin, one synthetic job, one upload, review, and artifact download.
