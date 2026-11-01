@@ -57,6 +57,7 @@ services:
       - ./backend/.env
     environment:
       DATA_DIR: /var/lib/fetch
+      PORT: 8000
       API_CORS_ORIGINS: http://localhost:3002,http://127.0.0.1:3002
       MAX_UPLOAD_MB: 25
       MAX_JOBS_PER_HOUR: 5

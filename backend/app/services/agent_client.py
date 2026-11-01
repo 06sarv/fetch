@@ -10,9 +10,13 @@ AGENT_URLS = {
     "assembler": os.getenv("ASSEMBLER_URL", "http://assembler:8100"),
 }
 
+def _service_url(value: str) -> str:
+    value = value.rstrip("/")
+    return value if "://" in value else f"http://{value}"
+
 def call_agent(role: str, state: dict):
     try:
-        response = httpx.post(f"{AGENT_URLS[role]}/run", json={"state": state}, timeout=180.0)
+        response = httpx.post(f"{_service_url(AGENT_URLS[role])}/run", json={"state": state}, timeout=180.0)
         response.raise_for_status()
         result = response.json()
         if not isinstance(result, dict):

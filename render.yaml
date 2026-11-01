@@ -1,0 +1,156 @@
+envVarGroups:
+  - name: fetch-internal-secrets
+    envVars:
+      - key: FETCH_INTERNAL_TOKEN
+        generateValue: true
+
+services:
+  - type: web
+    name: fetch-api
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: DATA_DIR
+        value: /data
+      - key: MAX_UPLOAD_MB
+        value: "25"
+      - key: MAX_JOBS_PER_HOUR
+        value: "5"
+      - key: API_CORS_ORIGINS
+        value: http://localhost:3002
+      - fromGroup: fetch-internal-secrets
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: FIRECRAWL_API_KEY
+        sync: false
+      - key: OTTO_URL
+        fromService:
+          type: pserv
+          name: fetch-otto
+          property: hostport
+      - key: SCOUT_URL
+        fromService:
+          type: pserv
+          name: fetch-scout
+          property: hostport
+      - key: FORGER_URL
+        fromService:
+          type: pserv
+          name: fetch-forger
+          property: hostport
+      - key: ENGINEER_URL
+        fromService:
+          type: pserv
+          name: fetch-engineer
+          property: hostport
+      - key: ASSEMBLER_URL
+        fromService:
+          type: pserv
+          name: fetch-assembler
+          property: hostport
+    disk:
+      name: fetch-data
+      mountPath: /data
+      sizeGB: 1
+
+  - type: pserv
+    name: fetch-otto
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: uvicorn app.agent_service:app --host 0.0.0.0 --port 8100
+    envVars:
+      - key: AGENT_ROLE
+        value: otto
+      - key: FETCH_STORAGE_URL
+        fromService:
+          type: web
+          name: fetch-api
+          property: hostport
+      - fromGroup: fetch-internal-secrets
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+
+  - type: pserv
+    name: fetch-scout
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: uvicorn app.agent_service:app --host 0.0.0.0 --port 8100
+    envVars:
+      - key: AGENT_ROLE
+        value: scout
+      - key: FETCH_STORAGE_URL
+        fromService:
+          type: web
+          name: fetch-api
+          property: hostport
+      - fromGroup: fetch-internal-secrets
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+
+  - type: pserv
+    name: fetch-forger
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: uvicorn app.agent_service:app --host 0.0.0.0 --port 8100
+    envVars:
+      - key: AGENT_ROLE
+        value: forger
+      - key: FETCH_STORAGE_URL
+        fromService:
+          type: web
+          name: fetch-api
+          property: hostport
+      - fromGroup: fetch-internal-secrets
+      - key: FIRECRAWL_API_KEY
+        sync: false
+
+  - type: pserv
+    name: fetch-engineer
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: uvicorn app.agent_service:app --host 0.0.0.0 --port 8100
+    envVars:
+      - key: AGENT_ROLE
+        value: engineer
+      - key: FETCH_STORAGE_URL
+        fromService:
+          type: web
+          name: fetch-api
+          property: hostport
+      - fromGroup: fetch-internal-secrets
+
+  - type: pserv
+    name: fetch-assembler
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: uvicorn app.agent_service:app --host 0.0.0.0 --port 8100
+    envVars:
+      - key: AGENT_ROLE
+        value: assembler
+      - key: FETCH_STORAGE_URL
+        fromService:
+          type: web
+          name: fetch-api
+          property: hostport
+      - fromGroup: fetch-internal-secrets

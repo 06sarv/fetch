@@ -16,6 +16,8 @@ if ROLE not in HANDLERS:
 
 app = FastAPI(title=f"Fetch {ROLE.title()} Agent", version="0.1.0")
 STORAGE_URL = os.getenv("FETCH_STORAGE_URL", "http://api:8000").rstrip("/")
+if "://" not in STORAGE_URL:
+    STORAGE_URL = f"http://{STORAGE_URL}"
 INTERNAL_TOKEN = os.getenv("FETCH_INTERNAL_TOKEN", "")
 
 class AgentRequest(BaseModel):
