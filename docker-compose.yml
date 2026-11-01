@@ -1,0 +1,73 @@
+x-agent-base: &agent-base
+  build: ./backend
+  env_file:
+    - ./backend/.env
+  command: ["uvicorn", "app.agent_service:app", "--host", "0.0.0.0", "--port", "8100"]
+  volumes:
+    - fetch-data:/var/lib/fetch
+  expose:
+    - "8100"
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')"]
+    interval: 15s
+    timeout: 3s
+    retries: 3
+
+services:
+  otto:
+    <<: *agent-base
+    environment: {AGENT_ROLE: otto, DATA_DIR: /var/lib/fetch}
+  scout:
+    <<: *agent-base
+    environment: {AGENT_ROLE: scout, DATA_DIR: /var/lib/fetch}
+  forger:
+    <<: *agent-base
+    environment: {AGENT_ROLE: forger, DATA_DIR: /var/lib/fetch}
+  engineer:
+    <<: *agent-base
+    environment: {AGENT_ROLE: engineer, DATA_DIR: /var/lib/fetch}
+  assembler:
+    <<: *agent-base
+    environment: {AGENT_ROLE: assembler, DATA_DIR: /var/lib/fetch}
+  api:
+    build: ./backend
+    env_file:
+      - ./backend/.env
+    environment:
+      DATA_DIR: /var/lib/fetch
+      API_CORS_ORIGINS: http://localhost:3002,http://127.0.0.1:3002
+      MAX_UPLOAD_MB: 25
+      OTTO_URL: http://otto:8100
+      SCOUT_URL: http://scout:8100
+      FORGER_URL: http://forger:8100
+      ENGINEER_URL: http://engineer:8100
+      ASSEMBLER_URL: http://assembler:8100
+    volumes:
+      - fetch-data:/var/lib/fetch
+    ports:
+      - "8001:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    depends_on:
+      otto: {condition: service_healthy}
+      scout: {condition: service_healthy}
+      forger: {condition: service_healthy}
+      engineer: {condition: service_healthy}
+      assembler: {condition: service_healthy}
+  web:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8001}
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8001}
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "3002:3000"
+volumes:
+  fetch-data:

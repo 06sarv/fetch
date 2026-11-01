@@ -1,0 +1,16 @@
+student_id,study_hours,attendance_rate,previous_score,final_score,course,notes
+S001,6,0.92,78,84,Data Science,regular
+S002,2,0.61,55,48,data science,late submissions
+S003,,0.88,72,75,Data-Science,
+S004,4,0.76,,68,DATA SCIENCE,needs review
+S005,120,0.95,81,89,Data Science,outlier study hours
+S006,3,,64,59,Data Science,attendance missing
+S007,5,0.83,70,73,data science,regular
+S008,1,0.45,40,35,Data Science,low attendance
+S009,8,0.97,90,94,Data Science,regular
+S010,4,0.79,66,,Data Science,missing target
+S011,4,0.79,66,,Data Science,missing target duplicate
+S012,7,0.91,85,88,Data-Science,regular
+S013,0,0.52,35,29,Data Science,low study time
+S014,6,0.86,74,79,data science,regular
+S015,999,1.20,110,105,Data Science,invalid values
