@@ -34,10 +34,42 @@ def _read(path):
     if suffix == ".txt": return pd.read_csv(path, sep=None, engine="python")
     raise ValueError("Unsupported tabular format")
 
-def _synthetic(objective):
+def _synthetic(objective, target_hint=None, requirements=None):
     rng = np.random.default_rng(42)
     n = 250
     goal = objective.lower()
+    required = [str(name).strip() for name in (requirements or []) if str(name).strip()]
+    if any(x in goal for x in ["insurance", "medical cost", "healthcare cost", "health cost", "premium"]):
+        age = rng.integers(18, 65, n)
+        sex = rng.choice(["female", "male"], n)
+        bmi = rng.normal(30, 6, n).clip(15, 53).round(1)
+        children = rng.poisson(1.1, n).clip(0, 5)
+        smoker = rng.choice(["yes", "no"], n, p=[.2, .8])
+        region = rng.choice(["northeast", "northwest", "southeast", "southwest"], n)
+        charges = (650 + age * 210 + bmi * 280 + children * 420 + (smoker == "yes") * 14500 + rng.normal(0, 2400, n)).clip(1000).round(2)
+        return pd.DataFrame({"age": age, "sex": sex, "bmi": bmi, "children": children, "smoker": smoker, "region": region, "charges": charges})
+    if any(x in goal for x in ["house price", "housing", "home value", "property price", "real estate"]):
+        area = rng.normal(1850, 620, n).clip(450, 5200).round().astype(int)
+        bedrooms = rng.integers(1, 7, n); bathrooms = rng.integers(1, 5, n)
+        neighborhood = rng.choice(["urban", "suburban", "rural"], n, p=[.35, .45, .2])
+        year_built = rng.integers(1950, 2025, n)
+        price = (45000 + area * 145 + bedrooms * 11000 + bathrooms * 9000 + (neighborhood == "urban") * 35000 - (2025-year_built) * 350 + rng.normal(0, 35000, n)).clip(50000).round(-2).astype(int)
+        return pd.DataFrame({"area_sqft": area, "bedrooms": bedrooms, "bathrooms": bathrooms, "neighborhood": neighborhood, "year_built": year_built, "sale_price": price})
+    if any(x in goal for x in ["loan", "credit risk", "default", "borrower"]):
+        age = rng.integers(20, 70, n); income = rng.normal(62000, 24000, n).clip(15000, 180000).round(2)
+        credit_score = rng.normal(680, 65, n).clip(300, 850).round().astype(int)
+        loan_amount = rng.normal(18000, 11000, n).clip(500, 80000).round(2)
+        employment_years = rng.integers(0, 36, n); debt_to_income = rng.beta(2.4, 5, n).round(3)
+        chance = 1 / (1 + np.exp(-(-3 + debt_to_income * 5 + loan_amount / 18000 - credit_score / 250)))
+        defaulted = (rng.random(n) < chance).astype(int)
+        return pd.DataFrame({"age": age, "annual_income": income, "credit_score": credit_score, "loan_amount": loan_amount, "employment_years": employment_years, "debt_to_income_ratio": debt_to_income, "defaulted": defaulted})
+    if any(x in goal for x in ["sales", "revenue", "retail", "demand", "product"]):
+        category = rng.choice(["electronics", "clothing", "home", "beauty", "grocery"], n)
+        unit_price = rng.lognormal(3.2, .8, n).clip(3, 800).round(2)
+        units_sold = rng.poisson(18, n) + 1; discount = rng.uniform(0, .35, n).round(2)
+        marketing_spend = rng.uniform(0, 500, n).round(2)
+        revenue = (unit_price * units_sold * (1-discount) + marketing_spend * .6 + rng.normal(0, 80, n)).clip(0).round(2)
+        return pd.DataFrame({"product_category": category, "unit_price": unit_price, "units_sold": units_sold, "discount_rate": discount, "marketing_spend": marketing_spend, "revenue": revenue})
     if any(x in goal for x in ["churn", "renew", "retention"]):
         months = rng.integers(1, 60, n); spend = rng.normal(85, 25, n).clip(10, 250).round(2)
         p = 1 / (1 + np.exp(-(-1.5 + .035 * months - .012 * spend)))
@@ -50,9 +82,30 @@ def _synthetic(objective):
         study = rng.integers(1, 12, n); attendance = rng.uniform(.55, 1, n).round(3)
         score = np.clip(28 + study * 4.5 + attendance * 24 + rng.normal(0, 8, n), 0, 100).round(1)
         return pd.DataFrame({"study_hours": study, "attendance_rate": attendance, "previous_score": np.clip(score + rng.normal(0, 12, n), 0, 100).round(1), "final_score": score})
-    x1, x2 = rng.normal(size=n), rng.normal(size=n)
-    label = (x1 + .6*x2 + rng.normal(0, .6, n) > 0).astype(int)
-    return pd.DataFrame({"feature_a": x1.round(4), "feature_b": x2.round(4), "feature_c": rng.normal(0, 1, n).round(4), "outcome": label})
+    if any(x in goal for x in ["weather", "rain", "temperature", "precipitation"]):
+        temperature = rng.normal(22, 9, n).clip(-8, 42).round(1)
+        humidity = rng.uniform(25, 100, n).round(1); pressure = rng.normal(1013, 9, n).round(1)
+        wind = rng.gamma(2, 7, n).clip(0, 65).round(1); rain_mm = (rng.exponential(2, n) * (humidity > 72)).round(1)
+        rain_next_day = ((humidity > 78) & (pressure < 1015) | (rain_mm > 5)).astype(int)
+        return pd.DataFrame({"temperature_c": temperature, "humidity_pct": humidity, "pressure_hpa": pressure, "wind_speed_kmh": wind, "precipitation_mm": rain_mm, "rain_next_day": rain_next_day})
+    if required:
+        columns = {}
+        for name in required[:6]:
+            key = name.lower().replace(" ", "_")
+            if any(term in key for term in ["age", "year"]): columns[name] = rng.integers(18, 66, n)
+            elif any(term in key for term in ["income", "spend", "cost", "price", "amount", "salary"]): columns[name] = rng.normal(60000, 18000, n).clip(0).round(2)
+            elif any(term in key for term in ["rate", "percent", "ratio", "bmi"]): columns[name] = rng.uniform(.1, 1, n).round(3)
+            elif any(term in key for term in ["count", "tickets", "children", "visits"]): columns[name] = rng.poisson(2, n)
+            else: columns[name] = rng.normal(50, 15, n).round(2)
+        target = str(target_hint or "").strip()
+        if not target or target in columns: target = "target_value"
+        score = sum(np.asarray(value, dtype=float) for value in list(columns.values())[:3]) if columns else rng.normal(0, 1, n)
+        columns[target] = (score / max(len(columns), 1) + rng.normal(0, 5, n)).round(2)
+        return pd.DataFrame(columns)
+    age = rng.integers(18, 66, n); monthly_spend = rng.normal(75, 22, n).clip(10, 250).round(2)
+    purchases = rng.poisson(4, n); satisfaction = rng.integers(1, 6, n)
+    returned = ((monthly_spend > 120) & (satisfaction < 3) | (purchases == 0)).astype(int)
+    return pd.DataFrame({"customer_age": age, "monthly_spend": monthly_spend, "purchases_last_month": purchases, "satisfaction_rating": satisfaction, "returned_next_month": returned})
 
 def otto(state):
     words = state["objective"].lower()
@@ -117,12 +170,15 @@ def forger(state):
     if not state.get("source_path"):
         search_failed = False
         try:
-            sources = search_datasets(state["objective"])
+            proposal = state.get("proposal", {})
+            search_context = " ".join([state["objective"], *proposal.get("requirements", []), str(proposal.get("target_hint") or "")])
+            sources = search_datasets(search_context)
         except Exception:
             sources = []
             search_failed = True
         state["proposal"]["discovery_results"] = sources
-        df = _synthetic(state["objective"])
+        proposal = state.get("proposal", {})
+        df = _synthetic(state["objective"], proposal.get("target_hint"), proposal.get("requirements"))
         state["data"] = df
         candidate_columns = [{"name": str(c), "dtype": str(df[c].dtype), "missing": int(df[c].isna().sum()), "unique": int(df[c].nunique()), "relevance": "relevant", "selected": True} for c in df.columns]
         candidate_columns = _rank_columns(state["objective"], candidate_columns)
