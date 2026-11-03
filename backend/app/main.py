@@ -2,6 +2,7 @@ import asyncio
 import csv
 import hmac
 import logging
+import re
 import shutil
 import threading
 import time
@@ -12,9 +13,10 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, Header, HTTPException,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from .config import CORS_ORIGINS, DATA_DIR, MAX_UPLOAD_MB, MAX_JOBS_PER_HOUR, INTERNAL_TOKEN
-from .schemas import ColumnSelection, JobView, ReviewRequest
+from .schemas import ClarifyRequest, ColumnSelection, JobView, ReviewRequest, SourceSelection
 from .store import JobStore, now_iso
 from .agents.workflow import _read, deliver, discover
+from .services.agent_client import call_agent
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 STORE = JobStore(DATA_DIR)
@@ -32,6 +34,23 @@ def health():
 def require_internal_token(token: str | None):
     if not INTERNAL_TOKEN or not token or not hmac.compare_digest(token, INTERNAL_TOKEN):
         raise HTTPException(401, "Internal service authentication failed")
+
+def _missing_requested_fields(requirements: list[str], columns: list[str]) -> list[str]:
+    tokens = [set(re.findall(r"[a-z0-9]+", str(column).lower())) for column in columns]
+    synonyms = {"year": {"year", "date", "period"}, "country": {"country", "nation", "location", "entity"}, "prevalence": {"prevalence", "share", "rate", "percentage", "percent", "proportion"}}
+    missing = []
+    for requirement in requirements:
+        wanted = set(re.findall(r"[a-z0-9]+", str(requirement).lower()))
+        if not wanted:
+            continue
+        if "hiv" in wanted and ("prevalence" in wanted or len(wanted) == 1):
+            wanted = {"hiv", "prevalence"} if "prevalence" in wanted else {"hiv"}
+        def field_present(term: str) -> bool:
+            choices = synonyms.get(term, {term})
+            return any(bool(choices & column_tokens) for column_tokens in tokens)
+        if not all(field_present(term) for term in wanted):
+            missing.append(str(requirement))
+    return missing
 
 @app.api_route("/internal/jobs/{job_id}/files/{filename}", methods=["GET", "PUT"], include_in_schema=False)
 async def agent_file_exchange(job_id: str, filename: str, request: Request, x_fetch_internal_token: str | None = Header(None)):
@@ -59,11 +78,63 @@ async def agent_file_exchange(job_id: str, filename: str, request: Request, x_fe
 def list_jobs():
     return STORE.list()
 
+@app.post("/api/clarify")
+def clarify_objective(request: ClarifyRequest):
+    state = call_agent("otto", {"action": "clarify", "objective": request.objective, "answers": request.answers})
+    return state.get("clarification", {"question": "Please add a little more detail about the dataset you need.", "ready": False, "provider": None})
+
 @app.get("/api/jobs/{job_id}", response_model=JobView)
 def get_job(job_id: str):
     job = STORE.get(job_id)
     if not job:
         raise HTTPException(404, "Job not found")
+    return job
+
+@app.post("/api/jobs/{job_id}/source", response_model=JobView)
+def select_source(job_id: str, selection: SourceSelection):
+    job = STORE.get(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job["status"] != "awaiting_columns":
+        raise HTTPException(409, "Job is not ready for source selection")
+    listings = (job.get("proposal") or {}).get("discovery_results", [])
+    listing = next((item for item in listings if item.get("url") == selection.url), None)
+    if not listing:
+        raise HTTPException(422, "Choose a source from this job's search results")
+    job["status"] = "running"
+    job["updated_at"] = now_iso()
+    STORE.save(job)
+    try:
+        base_state = {"objective": job["objective"], "job_dir": str(DATA_DIR / "jobs" / job_id), "events": job["events"], "proposal": job["proposal"], "action": "acquire_source", "source_url": selection.url}
+        acquired = call_agent("forger", base_state)
+        profiled = call_agent("scout", {"objective": job["objective"], "job_dir": str(DATA_DIR / "jobs" / job_id), "events": acquired.get("events", []), "proposal": job["proposal"], "use_staged": True, "source_type": "web_source"})
+        proposal = profiled["proposal"]
+        missing = _missing_requested_fields(proposal.get("requirements", []), [column["name"] for column in proposal["profile"]["columns"]])
+        if missing:
+            raise ValueError(f"This source is missing requested fields: {', '.join(missing)}. Try another listing or attach a dataset with those fields.")
+        proposal["source"] = "web_source"
+        proposal["selected_source"] = {**listing, "download_url": acquired.get("acquired_source", {}).get("url"), "rows": acquired.get("acquired_source", {}).get("rows")}
+        proposal["discovery_results"] = listings
+        proposal["candidate_columns"] = proposal["profile"]["columns"]
+        proposal["candidate_rows"] = acquired.get("acquired_source", {}).get("rows", proposal["profile"].get("rows_sampled", 0))
+        job["proposal"] = proposal
+        job["events"] = profiled.get("events", [])
+        job["status"] = "awaiting_columns"
+        job["error"] = None
+    except HTTPException:
+        job["status"] = "awaiting_columns"
+        job["updated_at"] = now_iso()
+        STORE.save(job)
+        raise
+    except Exception as exc:
+        job["status"] = "awaiting_columns"
+        job["error"] = str(exc) if isinstance(exc, ValueError) else "Forger could not retrieve this listing. Try another source or use a downloaded file."
+        job["updated_at"] = now_iso()
+        STORE.save(job)
+        logger.exception("Source acquisition for job %s failed", job_id)
+        raise HTTPException(422, job["error"]) from exc
+    job["updated_at"] = now_iso()
+    STORE.save(job)
     return job
 
 async def _save_upload(upload: UploadFile, job_dir: Path):
