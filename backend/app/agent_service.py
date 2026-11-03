@@ -64,6 +64,7 @@ def run_agent(request: AgentRequest):
         upload_name = Path(state["source_path"]).name
         upload_path = job_dir / upload_name
         upload_path.write_bytes(storage_request("GET", job_id, upload_name))
+        state["source_path"] = str(upload_path)
         state["data"] = _read(str(upload_path))
     elif ROLE == "forger" and not state.get("source_path"):
         state["data"] = _synthetic(state["objective"])

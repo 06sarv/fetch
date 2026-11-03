@@ -3,6 +3,7 @@ import ipaddress
 import io
 import re
 import socket
+from datetime import datetime
 from urllib.parse import urljoin, urlparse
 import httpx
 import pandas as pd
@@ -86,6 +87,40 @@ def acquire_dataset(source_url: str, objective: str = "", max_bytes: int = 25 * 
     """Scrape a selected public dataset page, then fetch only an allowlisted tabular file."""
     if not _safe_source_url(source_url):
         raise ValueError("This source host is not on Fetch's public dataset allowlist.")
+    parsed_source = urlparse(source_url)
+    world_bank_match = re.search(r"/(?:series|indicator)/([A-Z0-9.]+)(?:/|$)", parsed_source.path, re.IGNORECASE)
+    if parsed_source.hostname and parsed_source.hostname.endswith("worldbank.org") and world_bank_match:
+        # The source page is scraped through Firecrawl first; its indicator code
+        # then maps to the World Bank's documented country/year JSON endpoint.
+        _scraped_links(source_url)
+        start_years = [int(value) for value in re.findall(r"\b(?:19|20)\d{2}\b", objective)]
+        start_year = min(start_years) if start_years else 1960
+        indicator = world_bank_match.group(1).upper()
+        api_url = f"https://api.worldbank.org/v2/country/all/indicator/{indicator}?format=json&per_page=20000&date={start_year}:{datetime.now().year}"
+        if not _safe_source_url(api_url):
+            raise ValueError("The official indicator API is not on Fetch's public source allowlist.")
+        response = httpx.get(api_url, headers={"User-Agent": "FetchDatasetDemo/1.0"}, timeout=35.0)
+        response.raise_for_status()
+        if len(response.content) > max_bytes:
+            raise ValueError("The selected dataset exceeds Fetch's 25 MB import limit.")
+        payload = response.json()
+        records = payload[1] if isinstance(payload, list) and len(payload) > 1 else []
+        rows = []
+        for record in records or []:
+            country = record.get("country") or {}
+            indicator_data = record.get("indicator") or {}
+            try:
+                year = int(record.get("date"))
+            except (TypeError, ValueError):
+                continue
+            value = record.get("value")
+            if value is None:
+                continue
+            rows.append({"country": country.get("value"), "country_code": record.get("countryiso3code"), "year": year, str(indicator_data.get("value") or indicator): value})
+        frame = pd.DataFrame(rows)
+        if frame.empty:
+            raise ValueError("The selected World Bank indicator returned no country/year observations.")
+        return frame, api_url
     candidates = [source_url] if urlparse(source_url).path.lower().endswith(tuple(TABULAR_EXTENSIONS)) else []
     if not candidates:
         links = _scraped_links(source_url)
