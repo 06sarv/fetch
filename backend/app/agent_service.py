@@ -2,12 +2,14 @@
 import os
 from pathlib import Path
 import tempfile
+import uuid
 from typing import Any
 import httpx
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from .agents.workflow import otto, scout, forger, engineer, assemble, _read, _synthetic
+from .services.discovery import acquire_dataset
 
 ROLE = os.getenv("AGENT_ROLE", "").lower()
 HANDLERS = {"otto": otto, "scout": scout, "forger": forger, "engineer": engineer, "assembler": assemble}
@@ -37,13 +39,28 @@ def storage_request(method: str, job_id: str, filename: str, content: bytes | No
 @app.post("/run")
 def run_agent(request: AgentRequest):
     state = request.state
-    job_id = Path(state["job_dir"]).name
+    job_id = Path(state.get("job_dir") or str(uuid.uuid4())).name
     job_dir = Path(tempfile.gettempdir()) / "fetch-agents" / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     # Agents run in separate containers, so workflow paths from the API are not
     # valid locally. Assemble outputs in this agent's temporary directory.
     state["job_dir"] = str(job_dir)
-    if ROLE == "scout" and state.get("source_path"):
+    if ROLE == "forger" and state.get("action") == "acquire_source":
+        try:
+            frame, final_url = acquire_dataset(state["source_url"], state.get("objective", ""))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if frame.empty or len(frame.columns) > 500:
+            raise HTTPException(422, "The selected source did not contain a usable table")
+        storage_request("PUT", job_id, "staged.csv", frame.to_csv(index=False).encode("utf-8"))
+        state["acquired_source"] = {"url": final_url, "rows": int(len(frame)), "columns": [str(c) for c in frame.columns]}
+        state.setdefault("events", []).append({"agent": "Forger", "message": f"Retrieved {len(frame)} rows from the selected public source."})
+        return {"state": state}
+    if ROLE == "scout" and state.get("use_staged"):
+        staged_path = job_dir / "staged.csv"
+        staged_path.write_bytes(storage_request("GET", job_id, "staged.csv"))
+        state["data"] = pd.read_csv(staged_path)
+    elif ROLE == "scout" and state.get("source_path"):
         upload_name = Path(state["source_path"]).name
         upload_path = job_dir / upload_name
         upload_path.write_bytes(storage_request("GET", job_id, upload_name))
