@@ -3,6 +3,8 @@ x-agent-base: &agent-base
   env_file:
     - ./backend/.env
   command: ["uvicorn", "app.agent_service:app", "--host", "0.0.0.0", "--port", "8100"]
+  volumes:
+    - ./backend/app:/srv/fetch/app:ro
   environment:
     DATA_DIR: /tmp/fetch
     FETCH_STORAGE_URL: http://api:8000
@@ -68,6 +70,7 @@ services:
       ENGINEER_URL: http://engineer:8100
       ASSEMBLER_URL: http://assembler:8100
     volumes:
+      - ./backend/app:/srv/fetch/app:ro
       - fetch-data:/var/lib/fetch
     ports:
       - "8001:8000"

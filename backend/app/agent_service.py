@@ -40,6 +40,9 @@ def run_agent(request: AgentRequest):
     job_id = Path(state["job_dir"]).name
     job_dir = Path(tempfile.gettempdir()) / "fetch-agents" / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
+    # Agents run in separate containers, so workflow paths from the API are not
+    # valid locally. Assemble outputs in this agent's temporary directory.
+    state["job_dir"] = str(job_dir)
     if ROLE == "scout" and state.get("source_path"):
         upload_name = Path(state["source_path"]).name
         upload_path = job_dir / upload_name
