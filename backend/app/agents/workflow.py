@@ -2,11 +2,13 @@
 from pathlib import Path
 from typing import Any, TypedDict
 import json
+import re
+from datetime import datetime
 import numpy as np
 import pandas as pd
 from langgraph.graph import END, StateGraph
 from ..services.discovery import search_datasets
-from ..services.llm import interpret_goal, assess_columns
+from ..services.llm import interpret_goal, assess_columns, ask_clarifying_question
 from ..config import FIRECRAWL_API_KEY
 from ..services.agent_client import call_agent
 
@@ -39,6 +41,32 @@ def _synthetic(objective, target_hint=None, requirements=None):
     n = 250
     goal = objective.lower()
     required = [str(name).strip() for name in (requirements or []) if str(name).strip()]
+    if any(x in goal for x in ["hiv", "aids", "human immunodeficiency"]):
+        if any(x in goal for x in ["prevalence", "epidemiology", "country-year", "country year", "trend", "trends", "population", "by country"]):
+            countries = np.array(["India", "South Africa", "Nigeria", "Kenya", "Uganda", "Tanzania", "Ethiopia", "Mozambique", "Zambia", "Zimbabwe", "Brazil", "Thailand", "Ukraine", "United States", "United Kingdom", "France", "China", "Indonesia", "Mexico", "Rwanda", "Botswana", "Malawi", "Ghana", "Cameroon", "Lesotho"])
+            requested_years = [int(value) for value in re.findall(r"\b(?:19|20)\d{2}\b", goal)]
+            start_year = min(requested_years) if requested_years else 2000
+            years = np.arange(start_year, datetime.now().year)
+            country = np.repeat(countries, len(years))
+            year = np.tile(years, len(countries))
+            country_baseline = np.repeat(rng.uniform(.15, 18, len(countries)), len(years))
+            variation = rng.normal(0, .12, len(country))
+            prevalence = np.maximum(.01, country_baseline - (year - 2014) * .025 + variation).round(3)
+            population = rng.integers(500_000, 95_000_000, len(country))
+            living_with_hiv = np.maximum(0, np.rint(population * prevalence / 100)).astype(int)
+            new_infections = np.maximum(0, np.rint(living_with_hiv * rng.uniform(.012, .08, len(country)))).astype(int)
+            aids_deaths = np.maximum(0, np.rint(living_with_hiv * rng.uniform(.004, .035, len(country)))).astype(int)
+            return pd.DataFrame({"country": country, "year": year, "estimated_hiv_prevalence_pct": prevalence, "population": population, "estimated_people_living_with_hiv": living_with_hiv, "estimated_new_hiv_infections": new_infections, "estimated_aids_related_deaths": aids_deaths})
+        cd4 = rng.normal(520, 190, n).clip(40, 1400).round().astype(int)
+        viral_load = np.exp(rng.normal(7.2, 1.4, n)).clip(20, 2_000_000).round().astype(int)
+        hemoglobin = rng.normal(13.4, 1.8, n).clip(6, 19).round(1)
+        white_cells = rng.normal(6.8, 1.8, n).clip(1, 18).round(1)
+        platelets = rng.normal(245, 55, n).clip(50, 500).round().astype(int)
+        liver_alt = rng.gamma(2.2, 14, n).clip(4, 180).round(1)
+        creatinine = rng.normal(.95, .25, n).clip(.3, 3).round(2)
+        total_cholesterol = rng.normal(185, 38, n).clip(90, 340).round().astype(int)
+        status = ((cd4 < 350) | (viral_load > 100_000)).astype(int)
+        return pd.DataFrame({"cd4_count": cd4, "viral_load_copies_ml": viral_load, "hemoglobin_g_dl": hemoglobin, "white_blood_cell_count": white_cells, "platelet_count": platelets, "alt_u_l": liver_alt, "creatinine_mg_dl": creatinine, "total_cholesterol_mg_dl": total_cholesterol, "hiv_status_demo_label": status})
     if any(x in goal for x in ["insurance", "medical cost", "healthcare cost", "health cost", "premium"]):
         age = rng.integers(18, 65, n)
         sex = rng.choice(["female", "male"], n)
@@ -118,6 +146,10 @@ def _synthetic(objective, target_hint=None, requirements=None):
     return pd.DataFrame({"customer_age": age, "monthly_spend": monthly_spend, "purchases_last_month": purchases, "satisfaction_rating": satisfaction, "returned_next_month": returned})
 
 def otto(state):
+    if state.get("action") == "clarify":
+        turn, provider = ask_clarifying_question(state["objective"], state.get("answers", []))
+        state["clarification"] = {"question": turn.question, "ready": turn.ready, "provider": provider}
+        return state
     words = state["objective"].lower()
     goal_spec, provider = interpret_goal(state["objective"])
     target = None
@@ -135,6 +167,14 @@ def otto(state):
         experience = goal_spec.experience_level
         requirements = goal_spec.feature_requirements
         summary = goal_spec.summary
+    if target and target.lower().replace(" ", "_") in {"aids", "hiv", "human_immunodeficiency_virus"}:
+        target = "hiv_status_demo_label"
+        task = "classification"
+    elif target is None and any(term in words for term in ["hiv", "aids", "human immunodeficiency"]) and any(term in words for term in ["prevalence", "epidemiology", "country-year", "country year", "trend", "trends", "population", "by country"]):
+        target = "estimated_hiv_prevalence_pct"
+        task = "regression"
+    elif any(term in words for term in ["hiv", "aids", "human immunodeficiency"]) and task == "regression":
+        task = "classification"
     state["proposal"] = {"task": task, "target_hint": target, "experience_level": experience, "requirements": requirements, "goal_summary": summary}
     suffix = f" using {provider}" if provider else " with local fallback"
     _event(state, "Otto", f"Understood the goal and prepared a {experience}-friendly dataset brief{suffix}.")
@@ -156,8 +196,8 @@ def _rank_columns(objective, columns):
     return columns
 
 def scout(state):
-    if state.get("source_path"):
-        df = _read(state["source_path"])
+    if state.get("source_path") or isinstance(state.get("data"), pd.DataFrame):
+        df = _read(state["source_path"]) if state.get("source_path") else state["data"]
         if df.empty or len(df.columns) > 500: raise ValueError("Dataset is empty or has too many columns")
         columns = []
         for c in df.columns:
@@ -167,7 +207,7 @@ def scout(state):
             columns.append({"name": name, "dtype": str(series.dtype), "missing": int(series.isna().sum()), "unique": int(series.nunique(dropna=True)), "relevance": "irrelevant" if excluded else "relevant", "selected": not excluded})
         columns = _rank_columns(state["objective"], columns)
         state["data"] = df
-        source = "uploaded"
+        source = state.get("source_type", "uploaded")
         _event(state, "Scout", f"Profiled {len(df)} rows and marked likely useful columns for review.")
     else:
         columns = []
@@ -177,31 +217,33 @@ def scout(state):
     return state
 
 def forger(state):
-    if not state.get("source_path"):
-        search_failed = False
-        try:
-            proposal = state.get("proposal", {})
-            search_context = " ".join([state["objective"], *proposal.get("requirements", []), str(proposal.get("target_hint") or "")])
-            sources = search_datasets(search_context)
-        except Exception:
-            sources = []
-            search_failed = True
-        state["proposal"]["discovery_results"] = sources
+    search_failed = False
+    try:
         proposal = state.get("proposal", {})
+        search_context = " ".join([state["objective"], str(proposal.get("goal_summary") or ""), *proposal.get("requirements", []), str(proposal.get("target_hint") or "")])
+        sources = search_datasets(search_context)
+    except Exception:
+        sources = []
+        search_failed = True
+    proposal = state.get("proposal", {})
+    proposal["discovery_results"] = sources
+    if not state.get("source_path"):
         df = _synthetic(state["objective"], proposal.get("target_hint"), proposal.get("requirements"))
         state["data"] = df
         candidate_columns = [{"name": str(c), "dtype": str(df[c].dtype), "missing": int(df[c].isna().sum()), "unique": int(df[c].nunique()), "relevance": "relevant", "selected": True} for c in df.columns]
         # Every field in a purpose-built synthetic schema is included deliberately.
         # A model's generic relevance guess must not erase the selected goal's schema.
         state["proposal"]["profile"] = {"rows_sampled": len(df), "columns": candidate_columns, "source": "synthetic demo"}
-        if sources:
-            _event(state, "Forger", f"Found {len(sources)} dataset listings. Review a source below and upload a downloaded file, or continue with the synthetic demo.")
-        elif search_failed:
-            _event(state, "Forger", "Dataset search is temporarily unavailable; using a labeled synthetic demonstration.")
-        elif not FIRECRAWL_API_KEY:
-            _event(state, "Forger", "Web dataset search is not configured; using a labeled synthetic demonstration.")
-        else:
-            _event(state, "Forger", "No candidate listings matched; using a labeled synthetic demonstration.")
+        state["proposal"]["source"] = "synthetic_demo"
+    if sources:
+        suffix = " The uploaded file remains active until you choose a source." if state.get("source_path") else " Continue with the labeled synthetic demo if no public file fits."
+        _event(state, "Forger", f"Found {len(sources)} dataset listings. Choose a source to try loading its public data.{suffix}")
+    elif search_failed:
+        _event(state, "Forger", "Dataset search is temporarily unavailable; the current upload or labeled synthetic demo remains available.")
+    elif not FIRECRAWL_API_KEY:
+        _event(state, "Forger", "Web dataset search is not configured; the current upload or labeled synthetic demo remains available.")
+    else:
+        _event(state, "Forger", "No candidate listings matched; the current upload or labeled synthetic demo remains available.")
     df = state["data"]
     state["proposal"].update({"candidate_columns": state["proposal"]["profile"]["columns"], "candidate_rows": int(len(df))})
     _event(state, "Forger", f"Prepared {len(df)} candidate rows from {state['proposal']['source'].replace('_', ' ')}.")
