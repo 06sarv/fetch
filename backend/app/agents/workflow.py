@@ -63,13 +63,23 @@ def _synthetic(objective, target_hint=None, requirements=None):
         chance = 1 / (1 + np.exp(-(-3 + debt_to_income * 5 + loan_amount / 18000 - credit_score / 250)))
         defaulted = (rng.random(n) < chance).astype(int)
         return pd.DataFrame({"age": age, "annual_income": income, "credit_score": credit_score, "loan_amount": loan_amount, "employment_years": employment_years, "debt_to_income_ratio": debt_to_income, "defaulted": defaulted})
-    if any(x in goal for x in ["sales", "revenue", "retail", "demand", "product"]):
+    if any(x in goal for x in ["sales", "revenue", "retail", "demand", "product"]) and not any(x in goal for x in ["return", "refund"]):
         category = rng.choice(["electronics", "clothing", "home", "beauty", "grocery"], n)
         unit_price = rng.lognormal(3.2, .8, n).clip(3, 800).round(2)
         units_sold = rng.poisson(18, n) + 1; discount = rng.uniform(0, .35, n).round(2)
         marketing_spend = rng.uniform(0, 500, n).round(2)
         revenue = (unit_price * units_sold * (1-discount) + marketing_spend * .6 + rng.normal(0, 80, n)).clip(0).round(2)
         return pd.DataFrame({"product_category": category, "unit_price": unit_price, "units_sold": units_sold, "discount_rate": discount, "marketing_spend": marketing_spend, "revenue": revenue})
+    if any(x in goal for x in ["product return", "product returns", "return rate", "returned item", "refund"]):
+        category = rng.choice(["electronics", "clothing", "home", "beauty", "sports"], n)
+        purchase_amount = rng.lognormal(3.5, .7, n).clip(5, 1200).round(2)
+        discount = rng.uniform(0, .5, n).round(2)
+        channel = rng.choice(["online", "store", "marketplace"], n)
+        delivery_days = rng.integers(1, 15, n)
+        satisfaction = rng.integers(1, 6, n)
+        return_probability = 1 / (1 + np.exp(-(-2.4 + discount * 3 + (satisfaction < 3) * 1.2 + (delivery_days > 7) * .7)))
+        returned = (rng.random(n) < return_probability).astype(int)
+        return pd.DataFrame({"product_category": category, "purchase_amount": purchase_amount, "discount_rate": discount, "sales_channel": channel, "delivery_days": delivery_days, "satisfaction_rating": satisfaction, "returned": returned})
     if any(x in goal for x in ["churn", "renew", "retention"]):
         months = rng.integers(1, 60, n); spend = rng.normal(85, 25, n).clip(10, 250).round(2)
         p = 1 / (1 + np.exp(-(-1.5 + .035 * months - .012 * spend)))
@@ -162,7 +172,7 @@ def scout(state):
     else:
         columns = []
         source = "synthetic_demo"
-        _event(state, "Scout", "No upload was provided; looking for candidate data, then using a labeled synthetic fallback.")
+        _event(state, "Scout", "No file was uploaded. Forger will generate a domain-matched synthetic dataset and search for related public sources.")
     state["proposal"].update({"profile": {"rows_sampled": len(state.get("data", [])), "columns": columns, "source": source}, "source": source})
     return state
 
@@ -181,7 +191,8 @@ def forger(state):
         df = _synthetic(state["objective"], proposal.get("target_hint"), proposal.get("requirements"))
         state["data"] = df
         candidate_columns = [{"name": str(c), "dtype": str(df[c].dtype), "missing": int(df[c].isna().sum()), "unique": int(df[c].nunique()), "relevance": "relevant", "selected": True} for c in df.columns]
-        candidate_columns = _rank_columns(state["objective"], candidate_columns)
+        # Every field in a purpose-built synthetic schema is included deliberately.
+        # A model's generic relevance guess must not erase the selected goal's schema.
         state["proposal"]["profile"] = {"rows_sampled": len(df), "columns": candidate_columns, "source": "synthetic demo"}
         if sources:
             _event(state, "Forger", f"Found {len(sources)} dataset listings. Review a source below and upload a downloaded file, or continue with the synthetic demo.")
